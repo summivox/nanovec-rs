@@ -1,6 +1,6 @@
 [package]
 name = "nanovec"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["summivox <summivox@gmail.com>"]
 
@@ -9,7 +9,6 @@ repository = "https://github.com/summivox/nanovec-rs.git"
 keywords = ["array", "vec", "compact", "bit-pack", "radix"]
 categories = ["compression", "data-structures", "no-std", "embedded"]
 license = "MIT"
-license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

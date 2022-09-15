@@ -1,5 +1,8 @@
 # `nanovec`: Vec-packed-in-an-Integer
 
+[![Crates.io](https://img.shields.io/crates/v/nanovec)](https://crates.io/crates/nanovec)
+[![docs.rs](https://img.shields.io/docsrs/nanovec)](https://docs.rs/nanovec)
+
 Ever felt the need to store a few small integers, but `Vec` (or even [tinyvec]) takes up more space than you'd like?
 
 `nanovec` offers both fixed- and variable-length arrays of integers with limited range, all packed within one or two
