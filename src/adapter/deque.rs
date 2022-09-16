@@ -2,85 +2,69 @@ use core::{
     fmt::{Debug, Formatter},
 };
 
-use num_traits::PrimInt;
+use crate::array::NanoArray;
 
-use super::NanoArrayBit;
-
-/// Represents a bounded double-ended queue (deque) of unsigned integers in the range
-/// `0..(1 << NUM_ELEM_BITS)`, stored as the number of elements (`u8`) + a wider unsigned integer
-/// with each element taking up exactly `NUM_ELEM_BITS`.
-///
-/// - `TContainer`: an unsigned integer storing all elements in the deque (`n` bits).
-/// - `TElem`: an unsigned integer that can fit each element (`m` bits).
-/// - `NUM_ELEM_BITS == k`: determines the range of each element (`k` bits).
-///
-/// The following must hold: `n >= m >= k`, i.e. `TContainer` must be at least as wide as `TElem`,
-/// and `TElem` must be at least `NUM_ELEM_BITS` wide.
-///
-/// This deque can fit at most `floor(n / k)` elements, which is available as [`Self::CAPACITY`]
-/// and [`Self::capacity()`].
+/// A double-ended queue (deque) backed by a [`NanoArray`] + 8-bit length.
+/// Maximum number of elements (capacity) is the length of the underlying [`NanoArray`].
 ///
 /// ## Summary of supported operations
 ///
-/// - {Immutable,Mutable} {push,pop} {front,back} of the deque (hence the name).
+/// - {Immutable,Mutable} {push,pop} at {front,back} of the deque.
+///
 /// - Get and {Immutable,Mutable} set element at index.
 ///
 /// ## Iterator support
 ///
 /// - This deque is [`Copy`] and self-iterates (directly implementing [`Iterator`]).
 ///   A non-consuming iterator can be emulated using `.clone()`.
+///
 /// - This deque implements [`FromIterator`] and can therefore be [`Iterator::collect`]ed into.
 ///
 /// Example:
 /// ```
-/// use nanovec::NanoVecBitN;
-/// type V = NanoVecBitN<u64, u16, 12>;
-/// let v = [0x123, 0x456, 0x789, 0xABC, 0xDEF].iter().collect::<V>();
+/// use nanovec::{NanoDeque, NanoArrayBit};
+/// type V = NanoDeque<NanoArrayBit<u64, u16, 12>>;
+/// let v = [0x123, 0x456, 0x789, 0xABC, 0xDEF].into_iter().collect::<V>();
 /// assert_eq!(v.front(), Some(0x123));
 /// assert_eq!(v.clone().collect::<Vec<_>>(), vec![0x123, 0x456, 0x789, 0xABC, 0xDEF]);
 /// assert_eq!(v.back(), Some(0xDEF));
 /// ```
 ///
-#[derive(Copy, Clone)]
-pub struct NanoVecBitN<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize> {
-    a: NanoArrayBit<TContainer, TElem, NUM_ELEM_BITS>,
+#[derive(Copy, Clone, Default)]
+pub struct NanoDeque<Array: NanoArray> {
+    a: Array,
     n: u8,
 }
 
-// Avoid typing this out throughout the implementation.
-// Usage: `<arr!()>::LENGTH`
-macro_rules! arr {
-    () => { NanoArrayBit::<TContainer, TElem, NUM_ELEM_BITS> };
-}
-
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
+impl<Array: NanoArray>
+NanoDeque<Array> {
     /// The maximum number of elements this stack can store.
-    pub const CAPACITY: usize = <arr!()>::LENGTH;
-    /// The maximum number of bits occupied in `TContainer`.
-    pub const CAPACITY_BITS: usize = <arr!()>::LENGTH_BITS;
+    pub const CAPACITY: usize = Array::LENGTH;
+    /// The maximum number of bits occupied in `Array::Packed`.
+    pub const CAPACITY_BITS: usize = Self::CAPACITY * 8;
 
     /// Creates an empty deque.
     pub fn new() -> Self {
         Self {
-            a: <arr!()>::new(),
+            a: Array::new(),
             n: 0,
         }
     }
 
     /// Creates a deque from its bit-packed integer representation + length.
     /// Panics if `len > capacity`.
-    pub fn from_packed_len(packed: TContainer, len: u8) -> Self {
+    pub fn from_packed_len(packed: Array::Packed, len: u8) -> Self {
         assert!(len <= Self::CAPACITY as u8);
         Self {
-            a: <arr!()>::from_packed(packed),
+            a: Array::from_packed(packed),
             n: len,
         }
     }
+    
     /// Converts the deque to its bit-packed integer representation + length.
-    pub fn to_packed_len(self) -> (TContainer, u8) { (self.a.packed(), self.n) }
+    pub fn to_packed_len(self) -> (Array::Packed, u8) { (self.a.packed(), self.n) }
     /// Converts the deque to its bit-packed integer representation (no length).
-    pub fn packed(self) -> TContainer { self.a.packed() }
+    pub fn packed(self) -> Array::Packed { self.a.packed() }
     /// Returns how many elements are currently in the deque.
     pub fn len(self) -> usize { self.n as usize }
 
@@ -97,7 +81,7 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     /// Returns a new deque = this deque with an additional element added to the front
     /// (a.k.a. immutable push front).
     /// Panics if this deque is full.
-    pub fn with_front(self, elem: TElem) -> Self {
+    pub fn with_front(self, elem: Array::Element) -> Self {
         assert!(!self.is_full());
         self.with_front_circular(elem)
     }
@@ -105,22 +89,22 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     /// Returns a new deque = this deque with an additional element added to the back
     /// (a.k.a. immutable push back).
     /// Panics if this deque is full.
-    pub fn with_back(self, elem: TElem) -> Self {
+    pub fn with_back(self, elem: Array::Element) -> Self {
         assert!(!self.is_full());
         self.with_back_circular(elem)
     }
 
     /// Pushes an element to the front of this deque.
     /// Panics if this deque is full.
-    pub fn push_front(&mut self, elem: TElem) {
+    pub fn push_front(&mut self, elem: Array::Element) {
         assert!(!self.is_full());
-        self.a = self.a.shl(1).with(0, elem);
+        self.a = self.a.shift_high(1).with(0, elem);
         self.n += 1;
     }
 
     /// Pushes an element to the back of this deque.
     /// Panics if this deque is full.
-    pub fn push_back(&mut self, elem: TElem) {
+    pub fn push_back(&mut self, elem: Array::Element) {
         assert!(!self.is_full());
         self.a = self.a.with(self.n as usize, elem);
         self.n += 1;
@@ -128,7 +112,7 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 
     /// Pushes an element to the front of this deque.
     /// If the deque is full, removes and returns the element at the back; otherwise `None`.
-    pub fn push_front_circular(&mut self, elem: TElem) -> Option<TElem> {
+    pub fn push_front_circular(&mut self, elem: Array::Element) -> Option<Array::Element> {
         let cap_back = if self.is_full() {
             Some(self.cap_back_unchecked())
         } else {
@@ -140,7 +124,7 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 
     /// Pushes an element to the back of this deque.
     /// If the deque is full, removes and returns the element at the front; otherwise `None`.
-    pub fn push_back_circular(&mut self, elem: TElem) -> Option<TElem> {
+    pub fn push_back_circular(&mut self, elem: Array::Element) -> Option<Array::Element> {
         let front = if self.is_full() { self.front() } else { None };
         *self = self.with_back_circular(elem);
         front
@@ -148,19 +132,19 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 
     /// Returns a new deque = this deque with an additional element added to the front,
     /// and the element at the back removed if the original deque is full.
-    pub fn with_front_circular(self, elem: TElem) -> Self {
+    pub fn with_front_circular(self, elem: Array::Element) -> Self {
         Self {
-            a: self.a.shl(1).with(0, elem),
+            a: self.a.shift_high(1).with(0, elem),
             n: if self.is_full() { self.n } else { self.n + 1 },
         }
     }
 
     /// Returns a new deque = this deque with an additional element added to the back,
     /// and the element at the front removed if the original deque is full.
-    pub fn with_back_circular(self, elem: TElem) -> Self {
+    pub fn with_back_circular(self, elem: Array::Element) -> Self {
         if self.is_full() {
             Self {
-                a: self.a.shr(1).with(Self::CAPACITY - 1, elem),
+                a: self.a.shift_low(1).with(Self::CAPACITY - 1, elem),
                 n: self.n,
             }
         } else {
@@ -175,35 +159,35 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     // get
 
     /// Returns the element at the front of the deque, or `None` if the deque is empty.
-    pub fn front(self) -> Option<TElem> {
+    pub fn front(self) -> Option<Array::Element> {
         (self.n > 0).then(|| self.front_unchecked())
     }
 
     /// Returns the element at the back of the deque, or `None` if the deque is empty.
-    pub fn back(self) -> Option<TElem> {
+    pub fn back(self) -> Option<Array::Element> {
         (self.n > 0).then(|| self.back_unchecked())
     }
 
     /// Returns the element at the back of the deque when the deque is full; `None` otherwise.
-    pub fn cap_back(self) -> Option<TElem> {
+    pub fn cap_back(self) -> Option<Array::Element> {
         self.is_full().then(|| self.cap_back_unchecked())
     }
 
     /// Returns the element at the front of the deque.
     /// The result can be anything if the deque is empty.
-    pub fn front_unchecked(self) -> TElem {
+    pub fn front_unchecked(self) -> Array::Element {
         self.a.get_unchecked(0)
     }
 
     /// Returns the element at the back of the deque.
     /// The result can be anything if the deque is empty.
-    pub fn back_unchecked(self) -> TElem {
+    pub fn back_unchecked(self) -> Array::Element {
         self.a.get_unchecked(self.n as usize - 1)
     }
 
     /// Returns the element at the back of the deque when the deque is full.
     /// The result can be anything otherwise.
-    pub fn cap_back_unchecked(self) -> TElem {
+    pub fn cap_back_unchecked(self) -> Array::Element {
         self.a.get_unchecked(Self::CAPACITY - 1)
     }
 
@@ -211,35 +195,35 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     // index
 
     /// Returns the `i`-th element from the front; `None` if the index is out of bounds.
-    pub fn get(self, i: usize) -> Option<TElem> {
+    pub fn get(self, i: usize) -> Option<Array::Element> {
         (i < self.n as usize).then(|| self.get_unchecked(i))
     }
 
     /// Returns a new deque = this deque with the `i`-th element from the front set to `elem`
     /// (a.k.a. immutable set index).
     /// Panics if the index is out of bounds.
-    pub fn with(self, i: usize, elem: TElem) -> Self {
+    pub fn with(self, i: usize, elem: Array::Element) -> Self {
         assert!(i < self.n as usize);
         self.with_unchecked(i, elem)
     }
 
     /// Sets the `i`-th element from the front to `elem`.
     /// Panics if the index is out of bounds.
-    pub fn set(&mut self, i: usize, elem: TElem) {
+    pub fn set(&mut self, i: usize, elem: Array::Element) {
         assert!(i < self.n as usize);
         self.set_unchecked(i, elem);
     }
 
     /// Returns the `i`-th element from the front.
     /// The result can be anything if the index is out of bounds.
-    pub fn get_unchecked(self, i: usize) -> TElem {
+    pub fn get_unchecked(self, i: usize) -> Array::Element {
         self.a.get_unchecked(i)
     }
 
     /// Returns a new deque = this deque with the `i`-th element from the front set to `elem`
     /// (a.k.a. immutable set index).
     /// No-op if the index is out of bounds.
-    pub fn with_unchecked(self, i: usize, elem: TElem) -> Self {
+    pub fn with_unchecked(self, i: usize, elem: Array::Element) -> Self {
         Self {
             a: self.a.with_unchecked(i, elem),
             n: self.n,
@@ -248,7 +232,7 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 
     /// Set the `i`-th element from the front to `elem`.
     /// No-op if the index is out of bounds.
-    pub fn set_unchecked(&mut self, i: usize, elem: TElem) {
+    pub fn set_unchecked(&mut self, i: usize, elem: Array::Element) {
         self.a.set_unchecked(i, elem);
     }
 
@@ -259,7 +243,7 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     /// Equivalent to an immutable [`Self::pop_front()`].
     pub fn without_front(self) -> Self {
         Self {
-            a: self.a.shr(1),
+            a: self.a.shift_low(1),
             n: if self.n == 0 { 0 } else { self.n - 1 },
         }
     }
@@ -275,17 +259,17 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 
     /// Removes the front element from this deque and returns it;
     /// `None` if the deque is empty.
-    pub fn pop_front(&mut self) -> Option<TElem> {
+    pub fn pop_front(&mut self) -> Option<Array::Element> {
         if self.n == 0 { return None; }
         let front = self.front_unchecked();
-        self.a = self.a.shr(1);
+        self.a = self.a.shift_low(1);
         self.n -= 1;
         Some(front)
     }
 
     /// Removes the back element from this deque and returns it;
     /// `None` if the deque is empty.
-    pub fn pop_back(&mut self) -> Option<TElem> {
+    pub fn pop_back(&mut self) -> Option<Array::Element> {
         if self.n == 0 { return None; }
         let back = self.back_unchecked();
         // fake delete
@@ -294,23 +278,18 @@ NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-Default for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
-    fn default() -> Self { Self::new() }
-}
-
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-Iterator for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
-    type Item = TElem;
+impl<Array: NanoArray>
+Iterator for NanoDeque<Array> {
+    type Item = Array::Element;
     fn next(&mut self) -> Option<Self::Item> { self.pop_front() }
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.n as usize, Some(self.n as usize))
     }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-FromIterator<TElem> for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from_iter<T: IntoIterator<Item=TElem>>(iter: T) -> Self {
+impl<Array: NanoArray>
+FromIterator<Array::Element> for NanoDeque<Array> {
+    fn from_iter<T: IntoIterator<Item=Array::Element>>(iter: T) -> Self {
         let mut v = Self::new();
         for elem in iter {
             v.push_back(elem);
@@ -319,9 +298,11 @@ FromIterator<TElem> for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
     }
 }
 
-impl<'a, TContainer: PrimInt, TElem: PrimInt + 'a, const NUM_ELEM_BITS: usize>
-FromIterator<&'a TElem> for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from_iter<T: IntoIterator<Item=&'a TElem>>(iter: T) -> Self {
+// TODO(summivox): rust (negative impl?) for FromIterator
+/*
+impl<'a, Array: NanoArray>
+FromIterator<&'a Array::Element> for NanoVec<Array> {
+    fn from_iter<T: IntoIterator<Item=&'a Array::Element>>(iter: T) -> Self {
         let mut v = Self::new();
         for elem in iter {
             v.push_back(*elem);
@@ -329,28 +310,30 @@ FromIterator<&'a TElem> for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
         v
     }
 }
+ */
 
-// Custom eq is needed --- unused parts of the packed value should be masked off.
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-PartialEq for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
+// Custom eq is needed --- unused parts of the packed array should not take part in the comparison.
+impl<Array: NanoArray>
+PartialEq for NanoDeque<Array> {
     fn eq(&self, other: &Self) -> bool {
         if self.n != other.n { return false; }
-        let mask = <arr!()>::prefix_mask(self.n as usize);
-        self.a.packed() & mask == other.a.packed() & mask
+        if self.n == 0 { return true; }
+        let x = Array::LENGTH - self.n as usize;
+        self.a.shift_high(x) == other.a.shift_high(x)
     }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-Eq for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {}
+impl<Array: NanoArray>
+Eq for NanoDeque<Array> {}
 
-impl<TContainer: PrimInt, TElem: PrimInt + Debug, const NUM_ELEM_BITS: usize>
-Debug for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
+impl<Array: NanoArray>
+Debug for NanoDeque<Array>
+    where
+        Array::Element: Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
-        let mut first = true;
-        for elem in *self {
-            if first {
-                first = false;
+        for (i, elem) in self.enumerate() {
+            if i == 0 {
                 write!(f, "{:?}", elem)?;
             } else {
                 write!(f, ", {:?}", elem)?;
@@ -364,11 +347,14 @@ Debug for NanoVecBitN<TContainer, TElem, NUM_ELEM_BITS> {
 mod tests {
     extern crate std;
 
+    use crate::NanoArrayBit;
     use super::*;
+
+    // TODO(summivox): test array and deque behaviors separately here
 
     #[test]
     fn test_32_8_4_push_pop() {
-        type V = NanoVecBitN::<u32, u8, 4>;
+        type V = NanoDeque<NanoArrayBit<u32, u8, 4>>;
         assert_eq!(V::CAPACITY, 8);
 
         let v00 = V::new();
@@ -456,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_32_8_4_pop_then_push() {
-        type V = NanoVecBitN::<u32, u8, 4>;
+        type V = NanoDeque<NanoArrayBit<u32, u8, 4>>;
         let v34 = V { a: 0x03210FE9.into(), n: 7 };
 
         let mut vv = v34;
@@ -478,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_32_8_4_push_circular() {
-        type V = NanoVecBitN::<u32, u8, 4>;
+        type V = NanoDeque<NanoArrayBit<u32, u8, 4>>;
         let v34 = V { a: 0x03210FE9.into(), n: 7 };
 
         // push_{front,back}_circular (indirectly tests {front,back})
@@ -510,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_32_8_4_index() {
-        type V = NanoVecBitN::<u32, u8, 4>;
+        type V = NanoDeque<NanoArrayBit<u32, u8, 4>>;
         let v34 = V { a: 0x03210FE9.into(), n: 7 };
 
         // get index

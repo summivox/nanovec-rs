@@ -2,131 +2,79 @@ use core::{
     fmt::{Debug, Formatter},
 };
 
-use num_traits::PrimInt;
+use num_traits::Zero;
 
-use super::NanoArrayBit;
+use crate::array::NanoArray;
 
-/// Represents a bounded stack of unsigned integers in the range `1..(1 << NUM_ELEM_BITS)`,
-/// stored as a wider unsigned integer with each element taking up exactly `NUM_ELEM_BITS`.
-///
-/// - `TContainer`: an unsigned integer storing all elements in the stack (`n` bits).
-/// - `TElem`: an unsigned integer that can fit each element (`m` bits).
-/// - `NUM_ELEM_BITS == k`: determines the range of each element (`k` bits).
-///
-/// The following must hold: `n >= m >= k`, i.e. `TContainer` must be at least as wide as `TElem`,
-/// and `TElem` must be at least `NUM_ELEM_BITS` wide.
-///
-/// This stack can fit at most `floor(n / k)` elements, which is available as [`Self::CAPACITY`]
-/// and [`Self::capacity()`].
+/// A _zero-terminated_ stack of _non-zero_ unsigned integers backed by [`NanoArray`] alone.
+/// Maximum number of elements (capacity) is the length of the underlying [`NanoArray`].
 ///
 /// ## Summary of supported operations
 ///
 /// - {Immutable,Mutable} {push,pop} at the top of the stack.
+///
 /// - Partitioning the stack into top and everything else.
-/// - Get element at index.
+///
+/// - Get element at index (set is not allowed).
 ///
 /// ## Iterator support
 ///
 /// - This stack is [`Copy`] and self-iterates (directly implementing [`Iterator`]).
 ///   A non-consuming iterator can be emulated using `.clone()`.
+///
 /// - This stack implements [`FromIterator`] and can therefore be [`Iterator::collect`]ed into.
 ///
 /// Example:
 /// ```
-/// use nanovec::NanoVecBitZ;
-/// type V = NanoVecBitZ::<u64, u16, 12>;
-/// let v = [0x123, 0x456, 0x789, 0xABC, 0xDEF].iter().collect::<V>();
+/// use nanovec::NanoStackBit;
+/// type V = NanoStackBit::<u64, u16, 12>;
+/// let v = [0x123, 0x456, 0x789, 0xABC, 0xDEF].into_iter().collect::<V>();
 /// assert_eq!(v.clone().collect::<Vec<_>>(), vec![0xDEF, 0xABC, 0x789, 0x456, 0x123]);
 /// // NOTE: The order is reversed because we pushed everything into a stack then popped them.
 /// assert_eq!(v.top(), Some(0xDEF));
 /// ```
 ///
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub struct NanoVecBitZ<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>(
-    NanoArrayBit::<TContainer, TElem, NUM_ELEM_BITS>
-);
+#[derive(Copy, Clone, Default, Eq, PartialEq)]
+pub struct NanoStack<Array: NanoArray>(Array);
 
-// Avoid typing this out throughout the implementation.
-// Usage: `<arr!()>::LENGTH`
-macro_rules! arr {
-    () => { NanoArrayBit::<TContainer, TElem, NUM_ELEM_BITS> };
-}
-
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    /// The maximum number of elements this stack can store.
-    pub const CAPACITY: usize = <arr!()>::LENGTH;
-    /// The maximum number of bits occupied in `TContainer`.
-    pub const CAPACITY_BITS: usize = <arr!()>::LENGTH_BITS;
-
-    ////////////////////////////////////////////////////////////////////
-    // basics
+impl<Array: NanoArray>
+NanoStack<Array> {
+    pub const CAPACITY: usize = Array::LENGTH;
 
     /// Creates an empty stack.
-    pub fn new() -> Self {
-        Self(<arr!()>::new())
-    }
+    pub fn new() -> Self { Self(Array::new()) }
 
-    /// Creates a stack from its bit-packed integer representation.
-    pub fn from_packed(packed: TContainer) -> Self {
-        Self(<arr!()>::from_packed(packed))
-    }
+    /// Creates a stack from its base-`RADIX` integer representation.
+    pub fn from_packed(packed: Array::Packed) -> Self { Self(Array::from_packed(packed)) }
 
-    /// Converts the stack to its bit-packed integer representation.
-    pub fn packed(self) -> TContainer {
-        self.0.packed()
-    }
+    /// Converts the stack to its base-`RADIX` integer representation.
+    pub fn packed(self) -> Array::Packed { self.0.packed() }
 
     /// Returns whether this stack is empty.
-    pub fn is_empty(self) -> bool {
-        self.0.get_unchecked(0) == TElem::zero()
-    }
+    pub fn is_empty(self) -> bool { self.top().is_none() }
 
-    /// Returns whether this stack can fit no more elements.
-    pub fn is_full(self) -> bool {
-        self.cap_bottom_unchecked() != TElem::zero()
-    }
+    /// Returns whether this stack is full.
+    pub fn is_full(self) -> bool { self.cap_bottom().is_some() }
 
-    /// Returns how many elements are currently in the stack.
+    /// Returns the number of elements currently in the stack.
     pub fn len(self) -> usize {
-        // Formula: ceil((N - clz) / K) == floor(((N + K - 1) - clz) / K)
-        // Example (N = 64, K = 12):
-        //     [4] [3] [2] [1] [0]
-        // 0x0_000_000_000_000_000 => clz = 64, (N - clz) = 0, result = 0
-        // 0x0_000_000_000_000_001 => clz = 63, (N - clz) = 1, result = 1
-        // 0x0_000_000_000_000_800 => clz = 52, (N - clz) = 12, result = 1
-        // 0x0_000_000_000_001_000 => clz = 51, (N - clz) = 13, result = 2
-        // 0x0_000_000_000_800_000 => clz = 40, (N - clz) = 24, result = 2
-        // ...
-        // 0x0_001_000_000_000_000 => clz = 15, (N - clz) = 49, result = 5
-        // 0x0_800_000_000_000_000 => clz = 4, (N - clz) = 60, result = 5
-        let n = <arr!()>::NUM_CONTAINER_BITS;
-        let k = NUM_ELEM_BITS;
-        let clz = self.0.packed().leading_zeros() as usize;
-        ((n + k - 1) - clz) / k
+        // TODO(summivox): backdoor arrays to optimize this?
+        self.count()
     }
-
-    /// Returns the maximum number of elements this stack can store.
-    pub const fn capacity(self) -> usize {
-        Self::CAPACITY
-    }
-
-    ////////////////////////////////////////////////////////////////////
-    // push
 
     /// Returns a new stack = this stack with an additional element on top
     /// (a.k.a. immutable push).
     /// Panics if the element is out of range, or the stack is full.
-    pub fn with(self, elem: TElem) -> Self {
-        assert!(elem != TElem::zero());
+    pub fn with(self, elem: Array::Element) -> Self {
+        assert!(elem != Array::Element::zero());
         assert!(!self.is_full());
         self.with_unchecked(elem)
     }
 
     /// Pushes an element onto the top of this stack.
     /// Panics if the element is out of range, or the stack is full.
-    pub fn push(&mut self, elem: TElem) {
-        assert!(elem != TElem::zero());
+    pub fn push(&mut self, elem: Array::Element) {
+        assert!(elem != Array::Element::zero());
         assert!(!self.is_full());
         self.push_unchecked(elem);
     }
@@ -135,113 +83,111 @@ NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
     /// If the stack is full, removes and returns the element at the bottom of the stack;
     /// otherwise returns `None`.
     /// Panics if the pushed element is out of range.
-    pub fn push_circular(&mut self, elem: TElem) -> Option<TElem> {
-        assert!(elem != TElem::zero());
+    pub fn push_circular(&mut self, elem: Array::Element) -> Option<Array::Element> {
+        assert!(elem != Array::Element::zero());
         let cap_last = self.cap_bottom_unchecked();
         self.push_unchecked(elem);
-        if cap_last != TElem::zero() { Some(cap_last) } else { None }
+        if cap_last != Array::Element::zero() { Some(cap_last) } else { None }
     }
 
     /// Returns a new stack = this stack with an additional element on top
     /// (immutable push).
     /// If the original stack is full, the element at the bottom of the stack will be removed in
     /// the new stack.
-    pub fn with_unchecked(self, elem: TElem) -> Self {
-        Self(self.0.shl(1).with(0, elem))
+    pub fn with_unchecked(self, elem: Array::Element) -> Self {
+        Self(self.0.shift_high(1).with(0, elem))
     }
 
     /// Pushes an element on to the top of this stack.
     /// If the stack is full, removes the element silently at the bottom of the stack.
-    pub fn push_unchecked(&mut self, elem: TElem) {
-        self.0 = self.0.shl(1).with(0, elem)
+    pub fn push_unchecked(&mut self, elem: Array::Element) {
+        self.0 = self.0.shift_high(1).with(0, elem)
     }
 
     /// Returns the element at the top of the stack, or `None` if the stack is empty.
-    pub fn top(self) -> Option<TElem> {
+    pub fn top(self) -> Option<Array::Element> {
         let elem = self.top_unchecked();
-        if elem != TElem::zero() { Some(elem) } else { None }
+        if elem != Array::Element::zero() { Some(elem) } else { None }
     }
 
     /// Returns the element at the top of the stack, or `0` if the stack is empty.
     /// Note that elements are not allowed to be `0` to begin with.
-    pub fn top_unchecked(self) -> TElem {
-        self.0.get_unchecked(0)
+    pub fn top_unchecked(self) -> Array::Element {
+        self.0.get(0)
     }
 
     /// Returns the element at the bottom of the stack if the stack is full; otherwise `None`.
-    pub fn cap_bottom(self) -> Option<TElem> {
+    pub fn cap_bottom(self) -> Option<Array::Element> {
         let elem = self.cap_bottom_unchecked();
-        if elem != TElem::zero() { Some(elem) } else { None }
+        if elem != Array::Element::zero() { Some(elem) } else { None }
     }
 
     /// Returns the element at the bottom of the stack if the stack is full; otherwise `0`.
     /// Note that elements are not allowed to be `0` to begin with.
-    pub fn cap_bottom_unchecked(self) -> TElem {
-        self.0.get_unchecked(Self::CAPACITY - 1)
+    pub fn cap_bottom_unchecked(self) -> Array::Element {
+        self.0.get(Self::CAPACITY - 1)
     }
 
     /// Returns a stack with all elements of this stack except for the one on top
     /// (a.k.a. immutable pop).
     /// When the original stack is empty, returns an empty stack.
     pub fn rest(self) -> Self {
-        Self(self.0.shr(1))
+        Self(self.0.shift_low(1))
     }
 
     /// Partitions the stack into the top element + all other elements in a stack.
     /// Returns `None` if the stack is empty.
-    pub fn top_rest(self) -> Option<(TElem, Self)> {
+    pub fn top_rest(self) -> Option<(Array::Element, Self)> {
         let elem = self.top_unchecked();
-        if elem != TElem::zero() { Some((elem, self.rest())) } else { None }
+        if elem != Array::Element::zero() { Some((elem, self.rest())) } else { None }
     }
 
     /// Partitions the stack into the top element + all other elements in a stack.
     /// Returns `0` + empty stack if the original stack is empty.
-    pub fn top_rest_unchecked(self) -> (TElem, Self) {
+    pub fn top_rest_unchecked(self) -> (Array::Element, Self) {
         (self.top_unchecked(), self.rest())
     }
 
     /// Returns the `i`-th element from the top of the stack; `None` if the element does not exist.
     /// e.g. `get(0)` returns the top, `get(1)` returns the one just below it, etc.
-    pub fn get(self, i: usize) -> Option<TElem> {
+    pub fn get(self, i: usize) -> Option<Array::Element> {
         let elem = self.get_unchecked(i);
-        if elem != TElem::zero() { Some(elem) } else { None }
+        if elem != Array::Element::zero() { Some(elem) } else { None }
     }
 
     /// Returns the `i`-th element from the top of the stack; `0` if the element does not exist.
     /// e.g. `get(0)` returns the top, `get(1)` returns the one just below it, etc.
     /// Note that elements are not allowed to be `0` to begin with.
-    pub fn get_unchecked(self, i: usize) -> TElem {
-        self.0.get_unchecked(i)
+    pub fn get_unchecked(self, i: usize) -> Array::Element {
+        self.0.get(i)
     }
 
     /// Removes the element on top and returns it; `None` if the stack is empty.
-    pub fn pop(&mut self) -> Option<TElem> {
+    pub fn pop(&mut self) -> Option<Array::Element> {
         let (elem, rest) = self.top_rest_unchecked();
         self.0 = rest.0;
-        if elem != TElem::zero() { Some(elem) } else { None }
+        if elem != Array::Element::zero() { Some(elem) } else { None }
     }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-Default for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    fn default() -> Self { Self::new() }
-}
-
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-From<TContainer> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from(packed: TContainer) -> Self {
+// TODO(summivox): rust (negative impl?)
+/*
+impl<Array: NanoArray>
+From<Array::Packed> for NanoStack<Array> {
+    fn from(packed: Array::Packed) -> Self {
         Self::from_packed(packed)
     }
 }
+*/
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-From<arr!()> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from(a: arr!()) -> Self { Self(a) }
+impl<Array: NanoArray>
+From<Array> for NanoStack<Array> {
+    fn from(a: Array) -> Self { Self(a) }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-FromIterator<TElem> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from_iter<T: IntoIterator<Item=TElem>>(iter: T) -> Self {
+impl<Array: NanoArray>
+FromIterator<Array::Element> for NanoStack<Array> {
+    fn from_iter<It: IntoIterator<Item=Array::Element>>(iter: It) -> Self {
         let mut v = Self::new();
         for elem in iter {
             v.push(elem);
@@ -250,9 +196,11 @@ FromIterator<TElem> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
     }
 }
 
-impl<'a, TContainer: PrimInt, TElem: PrimInt + 'a, const NUM_ELEM_BITS: usize>
-FromIterator<&'a TElem> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    fn from_iter<T: IntoIterator<Item=&'a TElem>>(iter: T) -> Self {
+// TODO(summivox): rust (negative impl?) for FromIterator
+/*
+impl<'a, Array: NanoArray>
+FromIterator<&'a Array::Element> for NanoStack<Array> {
+    fn from_iter<It: IntoIterator<Item=&'a Array::Element>>(iter: It) -> Self {
         let mut v = Self::new();
         for elem in iter {
             v.push(*elem);
@@ -260,24 +208,25 @@ FromIterator<&'a TElem> for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
         v
     }
 }
+*/
 
-impl<TContainer: PrimInt, TElem: PrimInt, const NUM_ELEM_BITS: usize>
-Iterator for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
-    type Item = TElem;
+impl<Array: NanoArray>
+Iterator for NanoStack<Array> {
+    type Item = Array::Element;
     fn next(&mut self) -> Option<Self::Item> { self.pop() }
     fn size_hint(&self) -> (usize, Option<usize>) {
         (0, Some(Self::CAPACITY))
     }
 }
 
-impl<TContainer: PrimInt, TElem: PrimInt + Debug, const NUM_ELEM_BITS: usize>
-Debug for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
+impl<Array: NanoArray>
+Debug for NanoStack<Array>
+    where
+        Array::Element: Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
-        let mut first = true;
-        for elem in *self {
-            if first {
-                first = false;
+        for (i, elem) in self.enumerate() {
+            if i == 0 {
                 write!(f, "{:?}", elem)?;
             } else {
                 write!(f, ", {:?}", elem)?;
@@ -290,13 +239,43 @@ Debug for NanoVecBitZ<TContainer, TElem, NUM_ELEM_BITS> {
 #[cfg(test)]
 mod tests {
     extern crate std;
+
     use std::vec;
     use std::vec::Vec;
+    use crate::NanoArrayBit;
     use super::*;
 
     #[test]
+    fn pushes() {
+        type S = NanoStack<[u8; 4]>;
+        let a = S::new();
+        assert_eq!(a.len(), 0);
+        let b = a.with(0x12);
+        assert_eq!(b.len(), 1);
+        let c = b.with(0x34);
+        assert_eq!(c.len(), 2);
+        let e = c.with(0x56).with(0x78);
+
+        let mut ee = e;
+        assert_eq!(ee.len(), 4);
+        assert_eq!(ee.pop(), Some(0x78));
+        assert_eq!(ee.len(), 3);
+        assert_eq!(ee.pop(), Some(0x56));
+        assert_eq!(ee.len(), 2);
+        assert_eq!(ee.pop(), Some(0x34));
+        assert_eq!(ee.len(), 1);
+        assert_eq!(ee.pop(), Some(0x12));
+        assert_eq!(ee.len(), 0);
+        assert_eq!(ee.pop(), None);
+
+        // TODO(summivox): finish porting these
+    }
+
+    // TODO(summivox): test array and stack behaviors separately here
+
+    #[test]
     fn test_64_16_12() {
-        type V = NanoVecBitZ::<u64, u16, 12>;
+        type V = NanoStack<NanoArrayBit<u64, u16, 12>>;
         assert_eq!(V::CAPACITY, 5);
 
         let a = V::new();
@@ -375,24 +354,24 @@ mod tests {
 
         assert_eq!(f.collect::<Vec<_>>(),
                    vec![0xDEF, 0xABC, 0x789, 0x456, 0x123]);
-        assert_eq!([0x123, 0x456, 0x789, 0xABC, 0xDEF].iter().collect::<V>(), f);
+        assert_eq!([0x123, 0x456, 0x789, 0xABC, 0xDEF].into_iter().collect::<V>(), f);
     }
 
     #[test]
     fn test_conv() {
-        type V = NanoVecBitZ::<u64, u16, 12>;
+        type V = NanoStack<NanoArrayBit<u64, u16, 12>>;
         let a = V::new().with(0x123).with(0x456);
         let x = a.0;
         let xa = V::from(x);
         let y = a.packed();
-        let ya = V::from(y);
+        let ya = V::from(NanoArrayBit::<u64, u16, 12>::from(y));
         assert_eq!(xa, a);
         assert_eq!(ya, a);
     }
 
     #[test]
     fn test_32_8() {
-        type V = NanoVecBitZ<u32, u8, 8>;
+        type V = NanoStack<NanoArrayBit<u32, u8, 8>>;
         let a = V::new().with(0x11).with(0x55).with(0x99).with(0xDD);
         assert_eq!(a.0, 0x115599DD.into());
         assert_eq!(a.collect::<Vec<_>>(),
@@ -403,12 +382,12 @@ mod tests {
         assert_eq!(aa.collect::<Vec<_>>(),
                    vec![0x33, 0xDD, 0x99, 0x55]);
         assert_eq!(aa,
-                   [0x55, 0x99, 0xDD, 0x33].iter().collect::<V>());
+                   [0x55, 0x99, 0xDD, 0x33].into_iter().collect::<V>());
     }
 
     #[test]
     fn print_it() {
-        std::println!("{:?}", NanoVecBitZ::<u64, u16, 12>::new()
-            .with(1).with(2).with(3).with(0xfff).with(0x800).clone());
+        type V = NanoStack<NanoArrayBit<u64, u16, 12>>;
+        std::println!("{:?}", V::from_iter([1, 2, 3, 0xFFF, 0x800]));
     }
 }

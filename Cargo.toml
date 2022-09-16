@@ -1,10 +1,10 @@
 [package]
 name = "nanovec"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["summivox <summivox@gmail.com>"]
 
-description = "Space-saving packed arrays and Vec-likes of small integers."
+description = "Arrays and Vec-likes of small integers packed in an integer or two."
 repository = "https://github.com/summivox/nanovec-rs.git"
 keywords = ["array", "vec", "compact", "bit-pack", "radix"]
 categories = ["compression", "data-structures", "no-std", "embedded"]
@@ -14,3 +14,4 @@ license = "MIT"
 
 [dependencies]
 num-traits = { version = "0.2", default-features = false }
+replace_with = { version = "0.1.7", default-features = false }
