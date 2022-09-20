@@ -51,7 +51,7 @@ NanoDeque<Array> {
         }
     }
 
-    /// Creates a deque from its bit-packed integer representation + length.
+    /// Creates a deque from packed [`NanoArray`] + length.
     /// Panics if `len > capacity`.
     pub fn from_packed_len(packed: Array::Packed, len: u8) -> Self {
         assert!(len <= Self::CAPACITY as u8);
@@ -60,11 +60,24 @@ NanoDeque<Array> {
             n: len,
         }
     }
+
+    /// Creates a deque from [`NanoArray`] + length.
+    pub fn from_array_len(array: Array, len: u8) -> Self {
+        assert!(len <= Self::CAPACITY as u8);
+        Self {
+            a: array,
+            n: len,
+        }
+    }
     
-    /// Converts the deque to its bit-packed integer representation + length.
+    /// Returns packed inner [`NanoArray`] + length.
     pub fn to_packed_len(self) -> (Array::Packed, u8) { (self.a.packed(), self.n) }
-    /// Converts the deque to its bit-packed integer representation (no length).
+    /// Returns inner [`NanoArray`] + length.
+    pub fn to_array_len(self) -> (Array, u8) { (self.a, self.n) }
+    /// Returns the packed inner [`NanoArray`] (no length).
     pub fn packed(self) -> Array::Packed { self.a.packed() }
+    /// Returns the inner [`NanoArray`] (no length).
+    pub fn array(self) -> Array { self.a }
     /// Returns how many elements are currently in the deque.
     pub fn len(self) -> usize { self.n as usize }
 
@@ -278,6 +291,16 @@ NanoDeque<Array> {
     }
 }
 
+// TODO(summivox): why does this not work?
+/*
+impl<Array: NanoArray>
+From<NanoDeque<Array>> for Array {
+    fn from(deque: NanoDeque<Array>) -> Self {
+        deque.a
+    }
+}
+*/
+
 impl<Array: NanoArray>
 Iterator for NanoDeque<Array> {
     type Item = Array::Element;
@@ -349,6 +372,15 @@ mod tests {
 
     use crate::NanoArrayBit;
     use super::*;
+
+    #[test]
+    fn test_conversion() {
+        // type A = NanoArrayBit<u32, u8, 4>;
+        // type V = NanoDequeBit<A>;
+        // TODO(summivox): why does this not work?
+        // let v: V = A::new().into();
+        // let a: A = V::new().into();
+    }
 
     // TODO(summivox): test array and deque behaviors separately here
 

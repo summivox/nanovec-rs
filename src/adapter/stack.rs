@@ -44,11 +44,17 @@ NanoStack<Array> {
     /// Creates an empty stack.
     pub fn new() -> Self { Self(Array::new()) }
 
-    /// Creates a stack from its base-`RADIX` integer representation.
+    /// Creates a stack from its packed [`NanoArray`].
     pub fn from_packed(packed: Array::Packed) -> Self { Self(Array::from_packed(packed)) }
 
-    /// Converts the stack to its base-`RADIX` integer representation.
+    /// Creates a stack from its [`NanoArray`].
+    pub fn from_array(array: Array) -> Self { Self(array) }
+
+    /// Returns the inner packed [`NanoArray`].
     pub fn packed(self) -> Array::Packed { self.0.packed() }
+
+    /// Returns the inner [`NanoArray`].
+    pub fn array(self) -> Array { self.0 }
 
     /// Returns whether this stack is empty.
     pub fn is_empty(self) -> bool { self.top().is_none() }
@@ -184,6 +190,16 @@ impl<Array: NanoArray>
 From<Array> for NanoStack<Array> {
     fn from(a: Array) -> Self { Self(a) }
 }
+
+// TODO(summivox): why does this not work?
+/*
+impl<Array: NanoArray>
+From<NanoStack<Array>> for Array {
+    fn from(stack: NanoStack<Array>) -> Self {
+        stack.0
+    }
+}
+*/
 
 impl<Array: NanoArray>
 FromIterator<Array::Element> for NanoStack<Array> {
