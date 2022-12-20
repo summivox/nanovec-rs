@@ -45,6 +45,14 @@ Copy + Clone + Sized + PartialEq + Eq {
     /// Converts the array to its underlying representation.
     fn packed(self) -> Self::Packed;
 
+    // TODO(summivox): rust (const generics improvements?)
+    /*
+    /// Converts the packed array to a normal unpacked array.
+    fn unpacked(self) -> [Self::Element; Self::LENGTH] {
+        core::array::from_fn(|i| self.get(i))
+    }
+    */
+
     /// Returns the maximum element allowed in this array.
     fn max_elem() -> Self::Element;
 

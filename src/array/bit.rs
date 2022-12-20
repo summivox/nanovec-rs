@@ -295,6 +295,7 @@ mod tests {
         let mut aa = a;
         aa.set(4, 0xFFF);
         assert_eq!(aa.packed(), 0xFFF456789ABCDEF);
+        assert_eq!(aa.unpacked(), [0xDEF, 0xABC, 0x789, 0x456, 0xFFF]);
     }
 
     #[test]

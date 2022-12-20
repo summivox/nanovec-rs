@@ -28,6 +28,8 @@ impl<T: PrimInt + Unsigned, const LENGTH: usize> NanoArray for [T; LENGTH] {
 
     fn packed(self) -> Self::Packed { self }
 
+    fn unpacked(self) -> [T; LENGTH] { self }
+
     fn max_elem() -> Self::Element { T::max_value() }
 
     fn get_unchecked(self, i: usize) -> Self::Element { self[i] }

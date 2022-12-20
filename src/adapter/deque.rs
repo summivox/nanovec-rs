@@ -291,7 +291,8 @@ NanoDeque<Array> {
     }
 }
 
-// TODO(summivox): why does this not work?
+// NOTE: this cannot be implemented due to:
+// https://stackoverflow.com/a/73791185/4876553
 /*
 impl<Array: NanoArray>
 From<NanoDeque<Array>> for Array {

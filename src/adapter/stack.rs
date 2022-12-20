@@ -176,7 +176,6 @@ NanoStack<Array> {
     }
 }
 
-// TODO(summivox): rust (negative impl?)
 /*
 impl<Array: NanoArray>
 From<Array::Packed> for NanoStack<Array> {
@@ -191,7 +190,8 @@ From<Array> for NanoStack<Array> {
     fn from(a: Array) -> Self { Self(a) }
 }
 
-// TODO(summivox): why does this not work?
+// NOTE: this cannot be implemented due to:
+// https://stackoverflow.com/a/73791185/4876553
 /*
 impl<Array: NanoArray>
 From<NanoStack<Array>> for Array {
